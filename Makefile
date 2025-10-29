@@ -1,40 +1,30 @@
 # ============================================================
-# Makefile for SystemVerilog + UVM simulation (QuestaSim / Verilator)
-# Project root: /opt/projects/BasIC
-# Example:
-#   make comp SIM=QUESTA
-#   make run SIM=QUESTA uvm_test=tc_hello_world
+# Unified Makefile for SystemVerilog + UVM (QuestaSim)
+# and Python cocotb + pyuvm (Verilator)
 # ============================================================
 
-# ==== Makefile arguments ====
-SIM ?= QUESTA
+# ==== Arguments ====
+SIM        ?= QUESTA
+uvm_test   ?= hello_world
 
+# ==== Paths ====
+PROJ_ROOT  := /opt/projects/BasIC
+RTL_DIR    := $(PROJ_ROOT)/rtl
+VERIF_DIR  := $(PROJ_ROOT)/verif
+BUILD_DIR  := $(PROJ_ROOT)/build
 
-# ==== Project structure ====
-PROJ_ROOT   := /opt/projects/BasIC
-RTL_DIR     := $(PROJ_ROOT)/rtl
-SYNTH_DIR   := $(PROJ_ROOT)/rtl
-VERIF_DIR   := $(PROJ_ROOT)/verif
-SOFT_DIR    := $(PROJ_ROOT)/soft
-BUILD_DIR   := $(PROJ_ROOT)/build
+# ==== Sources ====
+RTL_SRCS   := $(abspath $(wildcard $(RTL_DIR)/*.sv))
+TB_SRCS    := $(abspath $(wildcard $(VERIF_DIR)/*.sv))
+TOP_MODULE := tb_$(uvm_test)
 
-# ==== Source files ====
-RTL_SRCS := $(abspath $(wildcard $(RTL_DIR)/*.sv))
-TB_SRCS  := $(abspath $(wildcard $(VERIF_DIR)/*.sv))
-
-
-TOP_MODULE  := tb_hello_world
-
-# ==== UVM test ====
-uvm_test ?= tc_hello_world
-
-# ==== Targets ====
 .PHONY: all compile elaborate comp run clean help
 
 all: run
 
+
 # ============================================================
-# QuestaSim flow
+# QuestaSim (SystemVerilog + UVM)
 # ============================================================
 ifeq ($(SIM),QUESTA)
 
@@ -54,35 +44,47 @@ comp: compile elaborate
 run:
 	@echo "=== [QuestaSim] Run phase ==="
 	cd $(BUILD_DIR)/questa && vsim -c $(TOP_MODULE) \
-		+UVM_TESTNAME=$(uvm_test) \
+		+UVM_TESTNAME=tc_$(uvm_test) \
 		-do "run -all; quit"
 
 endif
 
+
 # ============================================================
-# Verilator flow
+# Verilator (Python cocotb + pyuvm)
 # ============================================================
 ifeq ($(SIM),VERILATOR)
 
 compile:
-	@echo "=== [Verilator] Compilation phase ==="
-	mkdir -p $(BUILD_DIR)/verilator
-	verilator -Wall --cc -sv $(RTL_SRCS) $(TB_SRCS) \
-		--Mdir $(BUILD_DIR)/verilator
+	@echo "=== [Verilator + cocotb + pyuvm] Compilation phase ==="
+	@mkdir -p $(BUILD_DIR)/verilator_py
 
 elaborate:
-	@echo "=== [Verilator] Elaboration phase ==="
-	verilator --exe --build -sv $(RTL_SRCS) $(TB_SRCS) \
-		--top-module $(TOP_MODULE) \
-		-o $(BUILD_DIR)/verilator/sim_$(TOP_MODULE)
+	@echo "=== [Verilator + cocotb + pyuvm] Elaboration phase ==="
+	@mkdir -p $(BUILD_DIR)/verilator_py
 
 comp: compile elaborate
 
 run:
-	@echo "=== [Verilator] Run phase ==="
-	$(BUILD_DIR)/verilator/sim_$(TOP_MODULE) +UVM_TESTNAME=$(uvm_test)
+	@echo "=== [Verilator + cocotb + pyuvm] Run phase ==="
+	@if [ -f $(VERIF_DIR)/tb_$(uvm_test).py ]; then \
+		echo ">> Python UVM test found: $(VERIF_DIR)/tb_$(uvm_test).py"; \
+		cd $(BUILD_DIR)/verilator_py && \
+		TOPLEVEL_LANG=verilog \
+		SIM=verilator \
+		PYTHONPATH=$(VERIF_DIR):$$PYTHONPATH \
+		VERILOG_SOURCES=$(RTL_DIR)/$(uvm_test).sv \
+		EXTRA_ARGS="--top-module $(uvm_test)" \
+		COCOTB_TOPLEVEL=$(uvm_test) \
+		COCOTB_TEST_MODULES=tb_$(uvm_test) \
+		make -f $$(cocotb-config --makefiles)/Makefile.sim; \
+	else \
+		echo "!! ERROR: Python testbench not found: $(VERIF_DIR)/tb_$(uvm_test).py"; \
+		exit 1; \
+	fi
 
 endif
+
 
 # ============================================================
 # Cleanup
@@ -91,13 +93,16 @@ clean:
 	@echo "=== Cleaning build directory ==="
 	rm -rf $(BUILD_DIR)
 
+
 # ============================================================
 # Help
 # ============================================================
 help:
 	@echo ""
 	@echo "Usage:"
-	@echo "  make comp SIM=<QUESTA|VERILATOR>             — compile + elaborate"
-	@echo "  make run SIM=<QUESTA|VERILATOR> uvm_test=<test> — run simulation"
-	@echo "  make clean                                  — clean build directory"
+	@echo "  make comp SIM=QUESTA                  — compile QuestaSim"
+	@echo "  make comp SIM=VERILATOR               — compile Verilator"
+	@echo "  make run uvm_test=<name> SIM=QUESTA   — run UVM test in QuestaSim"
+	@echo "  make run uvm_test=<name> SIM=VERILATOR — run pyuvm+cocotb test"
+	@echo "  make clean                            — clean build directory"
 	@echo ""
